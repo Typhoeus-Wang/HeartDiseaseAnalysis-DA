@@ -1,0 +1,360 @@
+---
+title: "project"
+author: "Qirui Wang"
+date: "2023-05-28"
+output: pdf_document
+---
+
+Import library and data
+```{r echo=T}
+library(ggplot2)
+library(reshape2)
+library(GGally)
+
+
+data = read.csv("data/heart.csv")
+head(data)
+
+col_name = colnames(data)
+
+```
+
+Correlation matrix
+```{r echo=T}
+
+corr_mat <- round(cor(data),2) 
+
+melted_corr_mat <- melt(corr_mat)
+
+ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2, fill=value)) + 
+geom_tile()
+
+```
+
+Remove highly correlated variables. Correlation coefficients whose magnitude are between 0.9 and 1.0 indicate variables which can be considered very highly correlated. Correlation coefficients whose magnitude are between 0.7 and 0.9 indicate variables which can be considered highly correlated. Since none of them has correlation coefficients higher than 0.7, we remove none of those variables.
+```{r echo=T}
+cor_matrix <- cor(data[, colnames(data)])
+
+# Find indices of highly correlated features
+high_corr_indices <- which(abs(cor_matrix) > 0.6 & diag(cor_matrix) != 1, arr.ind = TRUE)
+
+# Remove one of the highly correlated features
+if (nrow(high_corr_indices) > 0) {
+  feature_to_remove <- rownames(cor_matrix)[high_corr_indices[1, 1]]
+  df <- df[, !colnames(df) %in% feature_to_remove]
+}
+```
+
+
+Data Distribution, histogram and KDE
+```{r echo=T}
+# Continuous variable, kde
+jpeg("plots/age_dis.jpg")
+kde = density(data$age)
+hist(data$age, col="lightblue", probability=T, main="distribution of age")
+lines(kde, col="blue")
+dev.off()
+
+jpeg("plots/trtbps_dis.jpg")
+kde = density(data$trtbps)
+hist(data$trtbps, col="lightblue", probability=T, main="distribution of trtbps")
+lines(kde, col="blue")
+dev.off()
+
+
+jpeg("plots/chol_dis.jpg")
+kde = density(data$chol)
+hist(data$chol, col="lightblue", probability=T, main="distribution of chol")
+lines(kde, col="blue")
+dev.off()
+
+
+jpeg("plots/thalachh_dis.jpg")
+kde = density(data$thalachh)
+hist(data$thalachh, col="lightblue", probability=T, main="distribution of thalachh")
+lines(kde, col="blue")
+dev.off()
+
+
+jpeg("plots/oldpeak_dis.jpg")
+kde = density(data$oldpeak)
+hist(data$oldpeak, col="lightblue", probability=T, main="distribution of oldpeak")
+lines(kde, col="blue")
+dev.off()
+```
+
+
+Import data again and add shuffling
+```{r echo=T}
+data <- read.csv("data/heart.csv")
+# randomize data
+data <- data[sample(nrow(data)), ]
+data
+```
+
+
+Use the top 4 most correlated variables for logistic regression
+```{r echo=T}
+# 4 most significant glm
+predictor_columns <- names(data)[-ncol(data)]
+formula <- as.formula(paste("output ~ ", paste(predictor_columns, collapse = " + ")))
+
+
+model <- glm(output ~ cp + thalachh + exng + oldpeak, data = data, family = binomial)
+
+summary(model)
+```
+
+Use cross validation to select which features/variables for logistic regression
+```{r echo=T}
+# Assuming your dataset is stored in a data frame called 'data'
+# And the last column is the output variable called 'output'
+
+# Set the number of folds for cross-validation
+num_folds <- 5
+
+# Calculate the correlations between input features and the output variable
+correlations <- cor(data[, -ncol(data)], data$output)
+
+# Sort the correlations based on absolute values in descending order
+sorted_indices <- order(abs(correlations), decreasing = TRUE)
+sorted_correlations <- correlations[sorted_indices]
+
+# Get the names of the sorted features
+sorted_features <- names(data[, -ncol(data)])[sorted_indices]
+
+# Initialize a list to store the results for each model
+model_results <- list()
+
+# Perform feature selection for each number of features
+for (num_features in 1:(ncol(data) - 1)) {
+  # Select the top 'num_features' correlated features 
+  selected_features <- sorted_features[1:num_features]
+  
+  # Initialize variables for accuracy calculation
+  accuracies <- numeric(num_folds)
+  
+  # Perform cross-validation
+  for (fold in 1:num_folds) {
+    # Create training and validation sets for the fold
+    set.seed(fold)  # Set seed for reproducibility
+    fold_indices <- sample(1:nrow(data), size = nrow(data) / num_folds)
+    train_data <- data[-fold_indices, ]
+    validation_data <- data[fold_indices, ]
+    
+    # Extract the selected features and the output variable
+    X_train <- train_data[, c(selected_features, "output")]
+    X_validation <- validation_data[, c(selected_features, "output")]
+    
+    # Train the GLM model
+    model <- glm(output ~ ., data = X_train, family = "binomial")
+    
+    # Make predictions on the validation set
+    predicted <- predict(model, newdata = X_validation, type = "response")
+    predicted_class <- ifelse(predicted > 0.5, 1, 0)
+    
+    # Calculate accuracy
+    accuracy <- sum(predicted_class == X_validation$output) / nrow(X_validation)
+    accuracies[fold] <- accuracy
+  }
+  
+  # Store the average accuracy across folds for the model
+  average_accuracy <- mean(accuracies)
+  model_results[[num_features]] <- list(num_features = num_features, accuracy = average_accuracy)
+}
+
+# Find the model with the best performance based on accuracy
+best_model <- model_results[[which.max(sapply(model_results, function(x) x$accuracy))]]
+best_model_num_features <- best_model$num_features
+best_model_accuracy <- best_model$accuracy
+
+# Print the results of the best model
+cat("Best Model Results:\n")
+cat("Number of Features:", best_model_num_features, "\n")
+cat("Accuracy:", best_model_accuracy, "\n")
+
+selected_data = data[c(sorted_features[1:num_features], "output")]
+
+```
+
+!!Do not include in report 
+```{r echo=T}
+# 5-fold crosss validation
+num_folds <- 5
+accuracies <- numeric(num_folds)
+f_scores <- numeric(num_folds)
+
+folds <- cut(seq(1, nrow(data)), breaks = num_folds, labels = FALSE)
+for (i in 1:num_folds) {
+  # Split the data into training and testing sets for the current fold
+  train_data <- selected_data[folds != i, ]
+  test_data <- selected_data[folds == i, ]
+  
+  # Train the logistic regression model
+  model <- glm(output ~ ., data = train_data, family = binomial)
+  
+  # Make predictions on the testing data
+  predicted <- predict(model, newdata = test_data, type = "response")
+  
+  # Convert the probabilities to binary predictions
+  predictions <- ifelse(predicted >= 0.5, 1, 0)
+  
+  # Calculate accuracy for the current fold
+  correct <- sum(predictions == test_data$output)
+  accuracy <- correct / nrow(test_data)
+  accuracies[i] <- accuracy
+  
+  TP <- sum(predictions == 1 & test_data$output == 1)
+  FP <- sum(predictions == 1 & test_data$output == 0)
+  FN <- sum(predictions == 0 & test_data$output == 1)
+  precision <- TP / (TP + FP)
+  recall <- TP / (TP + FN)
+  f_scores[i] <- 2 * precision * recall / (precision + recall)
+}
+
+# Calculate the mean accuracy across all folds
+mean_accuracy <- mean(accuracies)
+mean_accuracy
+mean_f_score <- mean(f_scores)
+mean_f_score
+```
+
+Bootstrap to estimate glm's accuracy? (change to estimate coefficients, record the confidence interval of each coefficients)
+```{r echo=T}
+# bootstrap of glm
+num_iterations = 1000
+validation_fraction <- 1/5
+
+accuracy_values <- numeric(num_iterations)
+f_scores <- numeric(num_iterations)
+
+# Perform bootstrap resampling
+for (i in 1:num_iterations) {
+  # Sample with replacement from the data
+  bootstrap_sample <- selected_data[sample(nrow(selected_data), replace = TRUE), ]
+  
+  # Split the data into training and validation sets
+  num_validation <- round(nrow(bootstrap_sample) * validation_fraction)
+  train_data <- bootstrap_sample[-(1:num_validation), ]
+  validation_data <- bootstrap_sample[(nrow(bootstrap_sample) - num_validation + 1):nrow(bootstrap_sample), ]
+  
+  # Train the GLM model on the training data
+  model <- glm(output ~ ., data = train_data, family = binomial)
+  
+  # Make predictions on the validation data
+  predicted <- predict(model, newdata = validation_data, type = "response")
+  
+  # Convert the probabilities to binary predictions
+  predictions <- ifelse(predicted >= 0.5, 1, 0)
+  
+  # Calculate accuracy for the current iteration
+  correct <- sum(predictions == validation_data$output)
+  accuracy <- correct / nrow(validation_data)
+  
+  # Store the accuracy value
+  accuracy_values[i] <- accuracy
+  
+  TP <- sum(predictions == 1 & validation_data$output == 1)
+  FP <- sum(predictions == 1 & validation_data$output == 0)
+  FN <- sum(predictions == 0 & validation_data$output == 1)
+  precision <- TP / (TP + FP)
+  recall <- TP / (TP + FN)
+  f_scores[i] <- 2 * precision * recall / (precision + recall)
+}
+
+
+mean_accuracy <- mean(accuracy_values)
+se_accuracy <- sd(accuracy_values) / sqrt(num_iterations)
+mean_f_score <- mean(f_scores)
+se_f_score <- sd(f_scores) / sqrt(num_iterations)
+
+
+cat("Mean Accuracy:", mean_accuracy, "\n")
+cat("Standard Error:", se_accuracy, "\n")
+cat("Mean F score:", mean_f_score, "\n")
+cat("Standard Error:", se_f_score, "\n")
+
+hist(accuracy_values)
+hist(f_scores)
+```
+
+Bootstrap to estimate correlation of variables.
+```{r echo=T}
+# bootstrap correlation
+small_data = data[, c("age", "sex", "cp", "thalachh", "output")]
+B = 10000 
+
+cors.age = numeric(B)
+cors.sex = numeric(B)
+cors.cp = numeric(B)
+cors.thalachh = numeric(B)
+
+for (i in 1:B) {
+    bootstrap_sample <- small_data[sample(nrow(small_data), replace = TRUE), ]
+    
+    cor_matrix = cor(bootstrap_sample)
+    cors.age[i] = cor_matrix[5,1]
+    cors.sex[i] = cor_matrix[5,2]
+    cors.cp[i] = cor_matrix[5,3]
+    cors.thalachh[i] = cor_matrix[5,4]
+}
+t.test(cors.age)$conf
+t.test(cors.sex)$conf
+t.test(cors.cp)$conf
+t.test(cors.thalachh)$conf
+hist(cors.age, breaks=20, probability = T)
+hist(cors.sex, breaks=20, probability = T)
+hist(cors.cp, breaks=20, probability = T)
+hist(cors.thalachh, breaks=20, probability = T)
+
+```
+
+
+Cross validation with feature normalization applied. (no change in result)
+```{r echo=T}
+# 5-fold crosss validation
+num_folds <- 5
+accuracies <- numeric(num_folds)
+f_scores <- numeric(num_folds)
+
+data$age <- scale(data$age)
+data$trtbps <- scale(data$trtbps)
+data$chol <- scale(data$chol)
+data$thalachh <- scale(data$thalachh)
+
+folds <- cut(seq(1, nrow(data)), breaks = num_folds, labels = FALSE)
+for (i in 1:num_folds) {
+  # Split the data into training and testing sets for the current fold
+  train_data <- data[folds != i, ]
+  test_data <- data[folds == i, ]
+  
+  # Train the logistic regression model
+  model <- glm(output ~ ., data = train_data, family = binomial)
+  
+  # Make predictions on the testing data
+  predicted <- predict(model, newdata = test_data, type = "response")
+  
+  # Convert the probabilities to binary predictions
+  predictions <- ifelse(predicted >= 0.5, 1, 0)
+  
+  # Calculate accuracy for the current fold
+  correct <- sum(predictions == test_data$output)
+  accuracy <- correct / nrow(test_data)
+  accuracies[i] <- accuracy
+  
+  TP <- sum(predictions == 1 & test_data$output == 1)
+  FP <- sum(predictions == 1 & test_data$output == 0)
+  FN <- sum(predictions == 0 & test_data$output == 1)
+  precision <- TP / (TP + FP)
+  recall <- TP / (TP + FN)
+  f_scores[i] <- 2 * precision * recall / (precision + recall)
+}
+
+# Calculate the mean accuracy across all folds
+mean_accuracy <- mean(accuracies)
+mean_accuracy
+mean_f_score <- mean(f_scores)
+mean_f_score
+
+```
+
